@@ -11,20 +11,69 @@ const dotenv = require('dotenv');
 const mongoose = require('mongoose');
 const connectDB = require('./db');
 
+const { Groq } = require('groq-sdk');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+
 const ClientConfig = require('./models/ClientConfig');
 const ChatSession = require('./models/ChatSession');
 const MessageHistory = require('./models/MessageHistory');
 
 dotenv.config();
 
-// Placeholder AI mock
+let groq;
+if (process.env.GROQ_API_KEY) {
+    groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+}
+
+let genAI;
+if (process.env.GOOGLE_API_KEY) {
+    genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+}
+
 const generateAIResponse = async (history, newContent) => {
-    // Mock the actual API call to Groq/Gemini with a placeholder async function
-    return new Promise(resolve => {
-        setTimeout(() => {
-            resolve(`[AI Placeholder]: I heard you say: "${newContent}"`);
-        }, 500);
-    });
+    try {
+        const systemPrompt = { role: 'system', content: 'You are a helpful and concise WhatsApp AI assistant.' };
+        
+        // Format history for Groq
+        const formattedHistory = history.map(msg => ({
+            role: msg.role === 'assistant' ? 'assistant' : 'user',
+            content: msg.content
+        }));
+
+        // Prioritize speed with Groq using llama-3.1-8b-instant (lightweight and very fast)
+        if (groq) {
+            const completion = await groq.chat.completions.create({
+                messages: [systemPrompt, ...formattedHistory, { role: 'user', content: newContent }],
+                model: 'llama-3.1-8b-instant',
+                temperature: 0.7,
+                max_tokens: 1024,
+            });
+            return completion.choices[0]?.message?.content || 'Sorry, I got an empty response.';
+        }
+        
+        // Fallback to Gemini 1.5 Flash (lightweight and fast)
+        if (genAI) {
+            const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+            
+            // Format history for Gemini
+            const geminiHistory = history.map(msg => ({
+                role: msg.role === 'assistant' ? 'model' : 'user',
+                parts: [{ text: msg.content }]
+            }));
+            
+            const chat = model.startChat({
+                history: geminiHistory,
+            });
+            
+            const result = await chat.sendMessage(newContent);
+            return result.response.text();
+        }
+
+        return `[AI Placeholder]: I heard you say: "${newContent}" (API Keys missing)`;
+    } catch (error) {
+        console.error('Error generating AI response:', error);
+        return 'Sorry, I encountered an error while processing your request.';
+    }
 };
 
 const logger = pino({ level: 'silent' });
