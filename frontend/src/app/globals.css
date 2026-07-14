@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: #0a0a0f;
+  --color-surface: rgba(255, 255, 255, 0.03);
+  --color-primary: #6366f1;
+  --color-secondary: #a855f7;
+  --color-accent: #10b981;
+  
+  --background-image-glass: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.01) 100%);
+  --background-image-glow: radial-gradient(circle at 50% -20%, #4f46e5 0%, transparent 40%);
+
+  --animate-pulse-slow: pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+body {
+  background-color: #0a0a0f;
+  color: #f8fafc;
+  min-height: 100vh;
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-[image:var(--background-image-glass)] backdrop-blur-xl border border-white/10 shadow-[0_8px_32px_0_rgba(0,0,0,0.36)] rounded-2xl;
+  }
+
+  .input-field {
+    @apply w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent transition-all duration-300;
+  }
+}
+
+/* Custom Scrollbar for Textarea */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
