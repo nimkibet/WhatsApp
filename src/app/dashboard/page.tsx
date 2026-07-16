@@ -1,149 +1,480 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { QrCode, Play, Pause, Power, MessageSquare, Zap } from 'lucide-react';
+import { Building2, Phone, Shield, Copy, Check, Loader2, Zap, MessageSquare, Power } from 'lucide-react';
 
-export default function DashboardOverview({ tenantId = "tenant_001" }) {
-  const [status, setStatus] = useState('disconnected');
-  const [qrCode, setQrCode] = useState('');
+const TENANTS = [
+  { id: 'tenant_001', name: 'Acme Corp', slug: 'acme' },
+  { id: 'tenant_002', name: 'Globex Corporation', slug: 'globex' },
+  { id: 'tenant_003', name: 'Initech Inc.', slug: 'initech' },
+  { id: 'tenant_004', name: 'Umbrella Corp', slug: 'umbrella' }
+];
+
+export default function MultiTenantDashboard() {
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5005';
+  
+  const [selectedTenantId, setSelectedTenantId] = useState('tenant_001');
+  const [statuses, setStatuses] = useState<{ [key: string]: { status: string; number: string; pairingCode: string | null; messagesProcessed: number } }>({
+    tenant_001: { status: 'disconnected', number: '', pairingCode: null, messagesProcessed: 12492 },
+    tenant_002: { status: 'disconnected', number: '', pairingCode: null, messagesProcessed: 8321 },
+    tenant_003: { status: 'disconnected', number: '', pairingCode: null, messagesProcessed: 4509 },
+    tenant_004: { status: 'disconnected', number: '', pairingCode: null, messagesProcessed: 1982 }
+  });
+
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [activationCode, setActivationCode] = useState('');
   const [loading, setLoading] = useState(false);
-  const [messagesProcessed, setMessagesProcessed] = useState(12492);
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://whatsapp.seek-on.app';
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
-  // Live counter for messages processed
+  // Live counter for messages processed for connected instances
   useEffect(() => {
     const counterInterval = setInterval(() => {
-      if (status === 'connected') {
-        setMessagesProcessed(prev => prev + Math.floor(Math.random() * 5) + 1);
-      }
-    }, 3000);
+      setStatuses(prev => {
+        const copy = { ...prev };
+        let changed = false;
+        Object.keys(copy).forEach(tid => {
+          if (copy[tid].status === 'connected') {
+            copy[tid] = {
+              ...copy[tid],
+              messagesProcessed: copy[tid].messagesProcessed + Math.floor(Math.random() * 3) + 1
+            };
+            changed = true;
+          }
+        });
+        return changed ? copy : prev;
+      });
+    }, 4000);
     return () => clearInterval(counterInterval);
-  }, [status]);
+  }, []);
 
-  // Poll server state on mount
+  // Poll server state for all tenants
   useEffect(() => {
-    async function fetchStatus() {
-      try {
-        const res = await fetch(`${API_BASE}/api/sessions/status/${tenantId}`);
-        const data = await res.json();
-        if (data) {
-          setStatus(data.liveStatus || 'disconnected');
-          setQrCode(data.qr || '');
-        }
-      } catch (err) {
-        console.error("Failed to fetch status", err);
+    async function fetchAllStatuses() {
+      const updated = { ...statuses };
+      let changed = false;
+      await Promise.all(
+        TENANTS.map(async (tenant) => {
+          try {
+            const res = await fetch(`${API_BASE}/api/sessions/status/${tenant.id}`);
+            if (res.ok) {
+              const data = await res.json();
+              if (data) {
+                const current = statuses[tenant.id];
+                const nextStatus = data.liveStatus || 'disconnected';
+                const nextNumber = data.config?.whatsappNumber || '';
+                const nextPairingCode = data.pairingCode || null;
+
+                if (
+                  !current || 
+                  current.status !== nextStatus || 
+                  current.number !== nextNumber || 
+                  current.pairingCode !== nextPairingCode
+                ) {
+                  updated[tenant.id] = {
+                    status: nextStatus,
+                    number: nextNumber,
+                    pairingCode: nextPairingCode,
+                    messagesProcessed: current ? current.messagesProcessed : 0
+                  };
+                  changed = true;
+                }
+              }
+            }
+          } catch (err) {
+            console.error(`Failed to fetch status for ${tenant.id}`, err);
+          }
+        })
+      );
+      if (changed) {
+        setStatuses(updated);
       }
     }
-    fetchStatus();
-    // Setting up a polling interval every 5 seconds to catch live pairing updates
-    const interval = setInterval(fetchStatus, 5000);
-    return () => clearInterval(interval);
-  }, [tenantId, API_BASE]);
 
-  // Trigger Baileys generation loop
-  const handleLinkWhatsApp = async () => {
+    fetchAllStatuses();
+    const interval = setInterval(fetchAllStatuses, 3000); // poll status every 3s
+    return () => clearInterval(interval);
+  }, [API_BASE, statuses]);
+
+  // Initiate connection flow with phone number and activation code
+  const handleLinkWhatsApp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!phoneNumber || !activationCode) {
+      setErrorMessage('Please fill in both phone number and activation code.');
+      return;
+    }
     setLoading(true);
+    setErrorMessage('');
     try {
-      await fetch(`${API_BASE}/api/sessions/initiate`, {
+      const res = await fetch(`${API_BASE}/api/sessions/initiate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tenantId })
+        body: JSON.stringify({
+          tenantId: selectedTenantId,
+          phoneNumber,
+          activationCode
+        })
       });
-      // the polling interval will catch the state update
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMessage(data.error || 'Failed to initiate connection.');
+      } else {
+        // Trigger status update immediately
+        setStatuses(prev => ({
+          ...prev,
+          [selectedTenantId]: {
+            ...prev[selectedTenantId],
+            status: 'connecting',
+            pairingCode: null
+          }
+        }));
+      }
     } catch (err) {
+      setErrorMessage('Network error connecting to API.');
       console.error(err);
     }
     setLoading(false);
   };
 
-  const handleStopSession = async () => {
+  // Disconnect/Logout session (purges Mongo data and unlinks)
+  const handleStopSession = async (tenantId: string) => {
+    setLoading(true);
+    setErrorMessage('');
     try {
-      await fetch(`${API_BASE}/api/sessions/stop`, {
+      const res = await fetch(`${API_BASE}/api/sessions/stop`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tenantId })
       });
-      setStatus('disconnected');
+      if (res.ok) {
+        setStatuses(prev => ({
+          ...prev,
+          [tenantId]: {
+            ...prev[tenantId],
+            status: 'disconnected',
+            pairingCode: null,
+            number: ''
+          }
+        }));
+        if (tenantId === selectedTenantId) {
+          setPhoneNumber('');
+          setActivationCode('');
+        }
+      } else {
+        setErrorMessage('Failed to terminate session.');
+      }
     } catch (err) {
+      setErrorMessage('Network error terminating session.');
       console.error(err);
     }
+    setLoading(false);
   };
 
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2000);
+  };
+
+  const activeTenant = TENANTS.find(t => t.id === selectedTenantId) || TENANTS[0];
+  const activeState = statuses[selectedTenantId] || { status: 'disconnected', number: '', pairingCode: null, messagesProcessed: 0 };
+
   return (
-    <div className="p-8 h-full">
-      <h1 className="text-3xl font-bold mb-2">Welcome back, Acme Corp</h1>
-      <p className="text-white/50 mb-8">Manage your WhatsApp bot instance and performance.</p>
+    <div className="p-8 h-full flex flex-col space-y-8 overflow-y-auto">
+      <div>
+        <h1 className="text-3xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-white to-white/70">
+          AgencyOS Control Hub
+        </h1>
+        <p className="text-white/50 text-sm mt-1">
+          Simultaneously coordinate and authorize up to 4 WhatsApp AI agent instances.
+        </p>
+      </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        
-        {/* Status Card */}
-        <div className="glass-panel p-6 lg:col-span-2 relative overflow-hidden group">
-          <div className="absolute top-0 right-0 w-64 h-64 bg-primary/10 rounded-full blur-3xl -mr-20 -mt-20 transition-transform group-hover:scale-110" />
+      {/* Grid of 4 Tenants */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {TENANTS.map((tenant) => {
+          const state = statuses[tenant.id] || { status: 'disconnected', number: '', pairingCode: null, messagesProcessed: 0 };
+          const isSelected = tenant.id === selectedTenantId;
           
-          <h2 className="text-xl font-semibold mb-6 flex items-center gap-2">
-            <Zap className="w-5 h-5 text-primary" />
-            Connection Status
-          </h2>
+          let statusColor = 'bg-red-500';
+          let borderGlow = 'border-white/10';
           
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="flex items-center gap-3 mb-2">
-                <div className={`w-3 h-3 rounded-full ${status === 'connected' ? 'bg-accent shadow-[0_0_12px_#10b981]' : status === 'connecting' ? 'bg-yellow-400 animate-pulse' : 'bg-red-500'}`} />
-                <span className="text-2xl font-bold tracking-wide capitalize">{status}</span>
+          if (state.status === 'connected') {
+            statusColor = 'bg-accent shadow-[0_0_12px_#10b981]';
+            borderGlow = isSelected ? 'border-accent shadow-[0_0_20px_rgba(16,185,129,0.2)]' : 'border-accent/40';
+          } else if (state.status === 'connecting') {
+            statusColor = 'bg-yellow-400 animate-pulse';
+            borderGlow = isSelected ? 'border-yellow-400 shadow-[0_0_20px_rgba(250,204,21,0.2)]' : 'border-yellow-400/40';
+          } else if (isSelected) {
+            borderGlow = 'border-primary shadow-[0_0_20px_rgba(99,102,241,0.2)]';
+          }
+
+          return (
+            <div
+              key={tenant.id}
+              onClick={() => {
+                setSelectedTenantId(tenant.id);
+                setErrorMessage('');
+                // Reset form inputs to match active tenant number if connected
+                if (state.status === 'connected') {
+                  setPhoneNumber(state.number);
+                } else if (state.status === 'disconnected') {
+                  setPhoneNumber('');
+                }
+              }}
+              className={`glass-panel p-6 cursor-pointer transition-all duration-300 transform hover:-translate-y-1 hover:bg-white/[0.04] flex flex-col justify-between h-48 relative border ${borderGlow}`}
+            >
+              {/* Top Row */}
+              <div className="flex justify-between items-start">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-lg bg-white/5 text-white/70">
+                    <Building2 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-base leading-tight">{tenant.name}</h3>
+                    <span className="text-[10px] text-white/40 font-mono">{tenant.id}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 bg-black/30 px-2 py-0.5 rounded-full border border-white/5">
+                  <div className={`w-2 h-2 rounded-full ${statusColor}`} />
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-white/80">
+                    {state.status}
+                  </span>
+                </div>
               </div>
-              <p className="text-white/50 text-sm">Number: {status === 'connected' ? '+1 (555) 123-4567' : 'None linked'}</p>
-            </div>
 
-            <div className="flex gap-3 z-10">
-              {status === 'disconnected' ? (
-                <button 
-                  onClick={handleLinkWhatsApp}
-                  disabled={loading}
-                  className="bg-white text-black px-6 py-3 rounded-xl font-semibold hover:bg-white/90 transition-all active:scale-95 flex items-center gap-2 shadow-[0_0_20px_rgba(255,255,255,0.3)] cursor-pointer disabled:opacity-50">
-                  <QrCode className="w-5 h-5" />
-                  {loading ? 'Initializing...' : 'Link WhatsApp'}
-                </button>
-              ) : (
-                <>
-                  <button className="bg-white/10 hover:bg-white/20 p-3 rounded-xl transition-all cursor-pointer">
-                    {status === 'paused' ? <Play className="w-5 h-5" /> : <Pause className="w-5 h-5" />}
-                  </button>
-                  <button onClick={handleStopSession} className="bg-red-500/20 hover:bg-red-500/30 text-red-400 p-3 rounded-xl transition-all cursor-pointer">
-                    <Power className="w-5 h-5" />
-                  </button>
-                </>
-              )}
+              {/* Middle Row: Phone Number */}
+              <div className="my-2">
+                <p className="text-[11px] text-white/45 uppercase tracking-wide">Linked Number</p>
+                <p className="text-sm font-semibold text-white/90">
+                  {state.number ? `+${state.number}` : 'No Instance Linked'}
+                </p>
+              </div>
+
+              {/* Bottom Row: Analytics */}
+              <div className="flex items-center justify-between border-t border-white/5 pt-3">
+                <span className="text-xs text-white/50 flex items-center gap-1">
+                  <MessageSquare className="w-3.5 h-3.5 text-secondary" />
+                  Processed
+                </span>
+                <span className="text-sm font-bold text-white/95 font-mono">
+                  {state.messagesProcessed.toLocaleString()}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Gateway Control Panel */}
+      <div className="glass-panel p-8 relative overflow-hidden border border-white/10 flex-1">
+        <div className="absolute top-0 right-0 w-96 h-96 bg-primary/5 rounded-full blur-3xl -mr-32 -mt-32 pointer-events-none" />
+        
+        <div className="flex items-center justify-between border-b border-white/5 pb-6 mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary to-secondary flex items-center justify-center shadow-lg">
+              <Zap className="text-white w-6 h-6" />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-white">
+                Instance Authorization Gateway
+              </h2>
+              <p className="text-white/40 text-xs mt-0.5">
+                Manage credentials and pairing credentials for <span className="text-white/80 font-semibold">{activeTenant.name}</span>.
+              </p>
             </div>
           </div>
 
-          {/* QR Code UI */}
-          {status === 'connecting' && qrCode && (
-            <div className="mt-6 p-4 bg-black/40 rounded-xl border border-white/5 flex flex-col items-center justify-center animate-in fade-in slide-in-from-bottom-4">
-              <p className="text-sm text-white/60 mb-4">Scan the QR code in WhatsApp Linked Devices</p>
-              <div className="bg-white p-4 rounded-xl shadow-lg">
-                <img 
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrCode)}`} 
-                  alt="WhatsApp QR Code" 
-                  className="w-48 h-48 object-contain"
-                />
-              </div>
-              <div className="mt-4 flex items-center gap-2 text-primary">
-                <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                <span className="text-sm font-medium">Awaiting scan...</span>
-              </div>
-            </div>
+          {activeState.status === 'connected' && (
+            <button
+              onClick={() => handleStopSession(selectedTenantId)}
+              disabled={loading}
+              className="bg-red-500/10 hover:bg-red-500/20 text-red-400 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all border border-red-500/20 hover:border-red-500/35 flex items-center gap-2 cursor-pointer disabled:opacity-50"
+            >
+              <Power className="w-4 h-4" />
+              Disconnect Instance
+            </button>
           )}
         </div>
 
-        {/* Analytics Card */}
-        <div className="glass-panel p-6 flex flex-col justify-center">
-          <div className="w-12 h-12 rounded-xl bg-secondary/20 flex items-center justify-center mb-4 text-secondary">
-            <MessageSquare className="w-6 h-6" />
+        {errorMessage && (
+          <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-xl text-sm mb-6 flex items-center gap-2">
+            <span className="font-bold">Error:</span> {errorMessage}
           </div>
-          <p className="text-white/60 text-sm font-medium mb-1">Messages Processed</p>
-          <h3 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-white/70">
-            {messagesProcessed.toLocaleString()}
-          </h3>
-        </div>
+        )}
+
+        {/* 1. DISCONNECTED STATE: Phone + License Code Inputs */}
+        {activeState.status === 'disconnected' && (
+          <form onSubmit={handleLinkWhatsApp} className="space-y-6 max-w-2xl">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              
+              {/* Phone Number Field */}
+              <div className="space-y-2">
+                <label className="block text-sm font-semibold text-white/70 flex items-center gap-2">
+                  <Phone className="w-4 h-4 text-primary" />
+                  WhatsApp Phone Number
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. 254712345678"
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value.replace(/[^0-9]/g, ''))}
+                  className="input-field placeholder:text-white/20 font-mono"
+                />
+                <p className="text-[10px] text-white/40 leading-relaxed">
+                  Enter number in international format without spaces or symbols (e.g., country code + phone). Do not add prefix (+).
+                </p>
+              </div>
+
+              {/* License / Activation Code Field */}
+              <div className="space-y-2">
+                <label className="block text-sm font-semibold text-white/70 flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-secondary" />
+                  Tenant Activation Key
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="ACT-XXXX"
+                  value={activationCode}
+                  onChange={(e) => setActivationCode(e.target.value)}
+                  className="input-field placeholder:text-white/20 font-mono tracking-wider"
+                />
+                <p className="text-[10px] text-white/40 leading-relaxed">
+                  Required verification key mapping to database licenses. Try: <code className="text-secondary">ACT-1234</code>, <code className="text-secondary">ACT-TENANT</code>, etc.
+                </p>
+              </div>
+
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="bg-white text-black font-semibold px-8 py-3.5 rounded-xl hover:bg-white/90 transition-all active:scale-95 flex items-center gap-2 shadow-[0_0_20px_rgba(255,255,255,0.25)] cursor-pointer disabled:opacity-50"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Warming Connection...
+                </>
+              ) : (
+                'Generate Activation Pairing Code'
+              )}
+            </button>
+          </form>
+        )}
+
+        {/* 2. CONNECTING STATE: Displays Pairing Code */}
+        {activeState.status === 'connecting' && (
+          <div className="space-y-8 max-w-3xl">
+            <div className="bg-black/30 border border-white/5 rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-6">
+              
+              <div>
+                <h3 className="font-bold text-white text-lg mb-1 flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-yellow-400 animate-ping" />
+                  Device Link Key Ready
+                </h3>
+                <p className="text-white/40 text-xs">
+                  Enter this pairing code on WhatsApp Link Device option to link {activeTenant.name}.
+                </p>
+              </div>
+
+              {/* Pairing Code Display */}
+              <div className="flex items-center gap-3">
+                {activeState.pairingCode ? (
+                  <>
+                    <div className="bg-white/5 border border-white/10 rounded-2xl px-6 py-4 font-mono text-3xl font-extrabold tracking-widest text-primary text-center select-all shadow-inner">
+                      {activeState.pairingCode.substring(0, 4)} - {activeState.pairingCode.substring(4)}
+                    </div>
+                    <button
+                      onClick={() => copyToClipboard(activeState.pairingCode || '')}
+                      className="p-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl transition-all cursor-pointer group active:scale-95"
+                      title="Copy Link Code"
+                    >
+                      {copiedCode ? <Check className="w-5 h-5 text-accent" /> : <Copy className="w-5 h-5 text-white/60 group-hover:text-white" />}
+                    </button>
+                  </>
+                ) : (
+                  <div className="flex items-center gap-3 text-white/50 text-sm font-medium py-3 px-6 bg-white/5 rounded-xl border border-white/5">
+                    <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                    Generating Pairing Code from Whatsapp Web...
+                  </div>
+                )}
+              </div>
+
+            </div>
+
+            {/* Instruction Steps */}
+            <div className="space-y-4">
+              <h4 className="font-semibold text-white text-sm">Instruction Manual for Verification:</h4>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                {[
+                  { step: '01', title: 'Open WhatsApp', desc: 'Open the app on your mobile device.' },
+                  { step: '02', title: 'Settings Device', desc: 'Tap Settings > Linked Devices > Link a Device.' },
+                  { step: '03', title: 'Phone Gateway', desc: 'Tap Link with Phone Number Instead.' },
+                  { step: '04', title: 'Authorize pairing', desc: 'Enter the 8-character code shown above.' }
+                ].map((item) => (
+                  <div key={item.step} className="bg-white/[0.02] border border-white/5 p-4 rounded-xl flex flex-col justify-between h-32">
+                    <span className="font-mono font-bold text-lg text-primary">{item.step}</span>
+                    <div>
+                      <p className="text-white/80 font-bold text-xs mb-1">{item.title}</p>
+                      <p className="text-[10px] text-white/40 leading-relaxed">{item.desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <button
+              onClick={() => handleStopSession(selectedTenantId)}
+              disabled={loading}
+              className="bg-white/5 hover:bg-white/10 border border-white/15 text-white/60 hover:text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-all active:scale-95 cursor-pointer disabled:opacity-50"
+            >
+              Cancel Linkage Flow
+            </button>
+          </div>
+        )}
+
+        {/* 3. CONNECTED STATE: Bot is fully operational */}
+        {activeState.status === 'connected' && (
+          <div className="space-y-6">
+            <div className="bg-accent/5 border border-accent/15 rounded-2xl p-6 flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center text-accent">
+                <Check className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-bold text-white text-lg">
+                  Connection Active & Secure
+                </h3>
+                <p className="text-white/40 text-xs mt-0.5">
+                  Whatsapp Bot instance for <span className="text-white/80 font-semibold">{activeTenant.name}</span> is live. Dual-Engine response system is monitoring chats.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              
+              {/* Linked Number Card */}
+              <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-6">
+                <p className="text-white/40 text-xs font-semibold uppercase tracking-wider mb-2">WhatsApp Account</p>
+                <div className="flex items-center gap-2">
+                  <Phone className="w-5 h-5 text-accent" />
+                  <span className="font-bold text-white text-lg">+{activeState.number}</span>
+                </div>
+              </div>
+
+              {/* AI Engine Status Card */}
+              <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-6">
+                <p className="text-white/40 text-xs font-semibold uppercase tracking-wider mb-2">Dual-Engine AI Mode</p>
+                <div className="flex items-center gap-2">
+                  <Zap className="w-5 h-5 text-secondary" />
+                  <span className="font-bold text-white text-lg">Active (Gemini / Groq)</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        )}
 
       </div>
     </div>
