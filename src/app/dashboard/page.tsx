@@ -3,17 +3,17 @@ import { useState, useEffect } from 'react';
 import { Building2, Phone, Shield, Copy, Check, Loader2, Zap, MessageSquare, Power } from 'lucide-react';
 
 const TENANTS = [
-  { id: 'tenant_001', name: 'Acme Corp', slug: 'acme' },
-  { id: 'tenant_002', name: 'Globex Corporation', slug: 'globex' },
-  { id: 'tenant_003', name: 'Initech Inc.', slug: 'initech' },
-  { id: 'tenant_004', name: 'Umbrella Corp', slug: 'umbrella' }
+  { id: 'tenant_001', name: 'Portal 1', slug: 'portal1' },
+  { id: 'tenant_002', name: 'Portal 2', slug: 'portal2' },
+  { id: 'tenant_003', name: 'Portal 3', slug: 'portal3' },
+  { id: 'tenant_004', name: 'Portal 4', slug: 'portal4' }
 ];
 
 export default function MultiTenantDashboard() {
   const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5005';
   
   const [selectedTenantId, setSelectedTenantId] = useState('tenant_001');
-  const [statuses, setStatuses] = useState<{ [key: string]: { status: string; number: string; pairingCode: string | null; messagesProcessed: number } }>({
+  const [statuses, setStatuses] = useState<{ [key: string]: { status: string; number: string; pairingCode: string | null; messagesProcessed: number; businessName?: string } }>({
     tenant_001: { status: 'disconnected', number: '', pairingCode: null, messagesProcessed: 12492 },
     tenant_002: { status: 'disconnected', number: '', pairingCode: null, messagesProcessed: 8321 },
     tenant_003: { status: 'disconnected', number: '', pairingCode: null, messagesProcessed: 4509 },
@@ -21,7 +21,6 @@ export default function MultiTenantDashboard() {
   });
 
   const [phoneNumber, setPhoneNumber] = useState('');
-  const [activationCode, setActivationCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -63,18 +62,21 @@ export default function MultiTenantDashboard() {
                 const nextStatus = data.liveStatus || 'disconnected';
                 const nextNumber = data.config?.whatsappNumber || '';
                 const nextPairingCode = data.pairingCode || null;
+                const nextBusinessName = data.config?.businessName || '';
 
                 if (
                   !current || 
                   current.status !== nextStatus || 
                   current.number !== nextNumber || 
-                  current.pairingCode !== nextPairingCode
+                  current.pairingCode !== nextPairingCode ||
+                  current.businessName !== nextBusinessName
                 ) {
                   updated[tenant.id] = {
                     status: nextStatus,
                     number: nextNumber,
                     pairingCode: nextPairingCode,
-                    messagesProcessed: current ? current.messagesProcessed : 0
+                    messagesProcessed: current ? current.messagesProcessed : 0,
+                    businessName: nextBusinessName
                   };
                   changed = true;
                 }
@@ -95,23 +97,32 @@ export default function MultiTenantDashboard() {
     return () => clearInterval(interval);
   }, [API_BASE, statuses]);
 
-  // Initiate connection flow with phone number and activation code
+  // Initiate connection flow with phone number
   const handleLinkWhatsApp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!phoneNumber || !activationCode) {
-      setErrorMessage('Please fill in both phone number and activation code.');
+    if (!phoneNumber) {
+      setErrorMessage('Please fill in the phone number.');
       return;
     }
     setLoading(true);
     setErrorMessage('');
+
+    // Normalize phone number (handles 07..., 7..., +254... and other formats)
+    let cleanedPhone = phoneNumber.replace(/\D/g, '');
+    if (cleanedPhone.startsWith('0') && cleanedPhone.length === 10) {
+      cleanedPhone = '254' + cleanedPhone.substring(1);
+    } else if ((cleanedPhone.startsWith('7') || cleanedPhone.startsWith('1')) && cleanedPhone.length === 9) {
+      cleanedPhone = '254' + cleanedPhone;
+    }
+
     try {
       const res = await fetch(`${API_BASE}/api/sessions/initiate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tenantId: selectedTenantId,
-          phoneNumber,
-          activationCode
+          phoneNumber: cleanedPhone,
+          activationCode: 'ACT-TENANT'
         })
       });
       const data = await res.json();
@@ -157,7 +168,6 @@ export default function MultiTenantDashboard() {
         }));
         if (tenantId === selectedTenantId) {
           setPhoneNumber('');
-          setActivationCode('');
         }
       } else {
         setErrorMessage('Failed to terminate session.');
@@ -176,10 +186,11 @@ export default function MultiTenantDashboard() {
   };
 
   const activeTenant = TENANTS.find(t => t.id === selectedTenantId) || TENANTS[0];
-  const activeState = statuses[selectedTenantId] || { status: 'disconnected', number: '', pairingCode: null, messagesProcessed: 0 };
+  const activeState = statuses[selectedTenantId] || { status: 'disconnected', number: '', pairingCode: null, messagesProcessed: 0, businessName: '' };
+  const activeTenantName = activeState.businessName || activeTenant.name;
 
   return (
-    <div className="p-8 h-full flex flex-col space-y-8 overflow-y-auto">
+    <div className="p-4 md:p-8 h-full flex flex-col space-y-6 md:space-y-8 overflow-y-auto">
       <div>
         <h1 className="text-3xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-white to-white/70">
           AgencyOS Control Hub
@@ -192,8 +203,9 @@ export default function MultiTenantDashboard() {
       {/* Grid of 4 Tenants */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {TENANTS.map((tenant) => {
-          const state = statuses[tenant.id] || { status: 'disconnected', number: '', pairingCode: null, messagesProcessed: 0 };
+          const state = statuses[tenant.id] || { status: 'disconnected', number: '', pairingCode: null, messagesProcessed: 0, businessName: '' };
           const isSelected = tenant.id === selectedTenantId;
+          const tenantName = state.businessName || tenant.name;
           
           let statusColor = 'bg-red-500';
           let borderGlow = 'border-white/10';
@@ -230,7 +242,7 @@ export default function MultiTenantDashboard() {
                     <Building2 className="w-5 h-5" />
                   </div>
                   <div>
-                    <h3 className="font-bold text-white text-base leading-tight">{tenant.name}</h3>
+                    <h3 className="font-bold text-white text-base leading-tight">{tenantName}</h3>
                     <span className="text-[10px] text-white/40 font-mono">{tenant.id}</span>
                   </div>
                 </div>
@@ -266,10 +278,10 @@ export default function MultiTenantDashboard() {
       </div>
 
       {/* Gateway Control Panel */}
-      <div className="glass-panel p-8 relative overflow-hidden border border-white/10 flex-1">
+      <div className="glass-panel p-4 md:p-8 relative overflow-hidden border border-white/10 flex-1">
         <div className="absolute top-0 right-0 w-96 h-96 bg-primary/5 rounded-full blur-3xl -mr-32 -mt-32 pointer-events-none" />
         
-        <div className="flex items-center justify-between border-b border-white/5 pb-6 mb-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/5 pb-6 mb-6">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary to-secondary flex items-center justify-center shadow-lg">
               <Zap className="text-white w-6 h-6" />
@@ -279,7 +291,7 @@ export default function MultiTenantDashboard() {
                 Instance Authorization Gateway
               </h2>
               <p className="text-white/40 text-xs mt-0.5">
-                Manage credentials and pairing credentials for <span className="text-white/80 font-semibold">{activeTenant.name}</span>.
+                Manage credentials and pairing credentials for <span className="text-white/80 font-semibold">{activeTenantName}</span>.
               </p>
             </div>
           </div>
@@ -302,49 +314,27 @@ export default function MultiTenantDashboard() {
           </div>
         )}
 
-        {/* 1. DISCONNECTED STATE: Phone + License Code Inputs */}
+        {/* 1. DISCONNECTED STATE: Phone Input */}
         {activeState.status === 'disconnected' && (
-          <form onSubmit={handleLinkWhatsApp} className="space-y-6 max-w-2xl">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              
-              {/* Phone Number Field */}
-              <div className="space-y-2">
-                <label className="block text-sm font-semibold text-white/70 flex items-center gap-2">
-                  <Phone className="w-4 h-4 text-primary" />
-                  WhatsApp Phone Number
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. 254712345678"
-                  value={phoneNumber}
-                  onChange={(e) => setPhoneNumber(e.target.value.replace(/[^0-9]/g, ''))}
-                  className="input-field placeholder:text-white/20 font-mono"
-                />
-                <p className="text-[10px] text-white/40 leading-relaxed">
-                  Enter number in international format without spaces or symbols (e.g., country code + phone). Do not add prefix (+).
-                </p>
-              </div>
-
-              {/* License / Activation Code Field */}
-              <div className="space-y-2">
-                <label className="block text-sm font-semibold text-white/70 flex items-center gap-2">
-                  <Shield className="w-4 h-4 text-secondary" />
-                  Tenant Activation Key
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="ACT-XXXX"
-                  value={activationCode}
-                  onChange={(e) => setActivationCode(e.target.value)}
-                  className="input-field placeholder:text-white/20 font-mono tracking-wider"
-                />
-                <p className="text-[10px] text-white/40 leading-relaxed">
-                  Required verification key mapping to database licenses. Try: <code className="text-secondary">ACT-1234</code>, <code className="text-secondary">ACT-TENANT</code>, etc.
-                </p>
-              </div>
-
+          <form onSubmit={handleLinkWhatsApp} className="space-y-6 max-w-md">
+            
+            {/* Phone Number Field */}
+            <div className="space-y-2">
+              <label className="block text-sm font-semibold text-white/70 flex items-center gap-2">
+                <Phone className="w-4 h-4 text-primary" />
+                WhatsApp Phone Number
+              </label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. +254 712 345678 or 0712345678"
+                value={phoneNumber}
+                onChange={(e) => setPhoneNumber(e.target.value)}
+                className="input-field placeholder:text-white/20 font-mono"
+              />
+              <p className="text-[10px] text-white/40 leading-relaxed">
+                Supports any format: Local (e.g. 0712345678 or 712345678), International (e.g. +254712345678), spaces, or dashes. We will normalize it automatically.
+              </p>
             </div>
 
             <button
@@ -375,7 +365,7 @@ export default function MultiTenantDashboard() {
                   Device Link Key Ready
                 </h3>
                 <p className="text-white/40 text-xs">
-                  Enter this pairing code on WhatsApp Link Device option to link {activeTenant.name}.
+                  Enter this pairing code on WhatsApp Link Device option to link {activeTenantName}.
                 </p>
               </div>
 
@@ -407,7 +397,7 @@ export default function MultiTenantDashboard() {
             {/* Instruction Steps */}
             <div className="space-y-4">
               <h4 className="font-semibold text-white text-sm">Instruction Manual for Verification:</h4>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                 {[
                   { step: '01', title: 'Open WhatsApp', desc: 'Open the app on your mobile device.' },
                   { step: '02', title: 'Settings Device', desc: 'Tap Settings > Linked Devices > Link a Device.' },
@@ -447,7 +437,7 @@ export default function MultiTenantDashboard() {
                   Connection Active & Secure
                 </h3>
                 <p className="text-white/40 text-xs mt-0.5">
-                  Whatsapp Bot instance for <span className="text-white/80 font-semibold">{activeTenant.name}</span> is live. Dual-Engine response system is monitoring chats.
+                  Whatsapp Bot instance for <span className="text-white/80 font-semibold">{activeTenantName}</span> is live. Dual-Engine response system is monitoring chats.
                 </p>
               </div>
             </div>

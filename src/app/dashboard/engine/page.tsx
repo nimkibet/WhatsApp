@@ -3,10 +3,10 @@ import { useState, useEffect } from 'react';
 import { Save, Sparkles, Server, Building2 } from 'lucide-react';
 
 const TENANTS = [
-  { id: 'tenant_001', name: 'Acme Corp' },
-  { id: 'tenant_002', name: 'Globex Corporation' },
-  { id: 'tenant_003', name: 'Initech Inc.' },
-  { id: 'tenant_004', name: 'Umbrella Corp' }
+  { id: 'tenant_001', name: 'Portal 1' },
+  { id: 'tenant_002', name: 'Portal 2' },
+  { id: 'tenant_003', name: 'Portal 3' },
+  { id: 'tenant_004', name: 'Portal 4' }
 ];
 
 export default function AIEngineConfig() {
@@ -18,6 +18,42 @@ export default function AIEngineConfig() {
   const [fallback, setFallback] = useState('We are currently away. We will respond shortly.');
   const [loading, setLoading] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [tenantNames, setTenantNames] = useState<{ [key: string]: string }>({
+    tenant_001: 'Portal 1',
+    tenant_002: 'Portal 2',
+    tenant_003: 'Portal 3',
+    tenant_004: 'Portal 4'
+  });
+
+  // Load tenant business names on mount
+  useEffect(() => {
+    async function loadTenantNames() {
+      const names = { ...tenantNames };
+      let changed = false;
+      await Promise.all(
+        TENANTS.map(async (tenant) => {
+          try {
+            const res = await fetch(`${API_BASE}/api/sessions/status/${tenant.id}`);
+            if (res.ok) {
+              const data = await res.json();
+              if (data && data.config?.businessName) {
+                if (names[tenant.id] !== data.config.businessName) {
+                  names[tenant.id] = data.config.businessName;
+                  changed = true;
+                }
+              }
+            }
+          } catch (e) {
+            console.error(e);
+          }
+        })
+      );
+      if (changed) {
+        setTenantNames(names);
+      }
+    }
+    loadTenantNames();
+  }, [API_BASE]);
 
   // Load config whenever selectedTenantId changes
   useEffect(() => {
@@ -55,6 +91,19 @@ export default function AIEngineConfig() {
       if (res.ok) {
         setSaveSuccess(true);
         setTimeout(() => setSaveSuccess(false), 3000);
+        // Refresh the current tenant name in layout just in case
+        try {
+          const statusRes = await fetch(`${API_BASE}/api/sessions/status/${selectedTenantId}`);
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            if (statusData && statusData.config?.businessName) {
+              setTenantNames(prev => ({
+                ...prev,
+                [selectedTenantId]: statusData.config.businessName
+              }));
+            }
+          }
+        } catch (e) {}
       }
     } catch (err) {
       console.error(err);
@@ -63,7 +112,7 @@ export default function AIEngineConfig() {
   };
 
   return (
-    <div className="p-8 h-full max-w-4xl flex flex-col space-y-8 overflow-y-auto">
+    <div className="p-4 md:p-8 h-full max-w-4xl flex flex-col space-y-6 md:space-y-8 overflow-y-auto">
       <div>
         <h1 className="text-3xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-white to-white/70">
           AI Engine Workspace
@@ -85,7 +134,7 @@ export default function AIEngineConfig() {
             className={`cursor-pointer px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border ${selectedTenantId === tenant.id ? 'bg-primary border-primary text-white shadow-md' : 'bg-white/5 border-white/5 text-white/60 hover:text-white hover:bg-white/10'}`}
           >
             <Building2 className="w-3.5 h-3.5" />
-            {tenant.name}
+            {tenantNames[tenant.id] || tenant.name}
           </button>
         ))}
       </div>
